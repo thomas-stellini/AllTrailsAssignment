@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import ast
 import logging
@@ -12,12 +13,12 @@ def load_data(base_file_name, suffix):
     :param suffix: 4 digit year representing the file date
     :return: pd.DataFrame
     """
-    logger.info('Beginning load_data at ' + str(datetime.now()))
+    logger.info('Beginning load_data with base_file_name {} and suffix {} at '.format(base_file_name, suffix) + str(datetime.now()))
     full_file_name = base_file_name + '_' + suffix + '.tsv'
     full_path = './source_data/{}'.format(full_file_name)
     df = pd.read_csv(full_path, sep='\t')
 
-    logger.info('Completing load_data at ' + str(datetime.now()))
+    logger.info('Completing load_data with base_file_name {} and suffix {} at '.format(base_file_name, suffix) + str(datetime.now()))
 
     return df
 
@@ -58,16 +59,16 @@ def unpack_recording_summary(df):
     df = df.merge(parsed_fields_df, how='left', left_index=True, right_index=True).drop('Recording_Summary', axis=1)
 
     df = df.rename(
-        {'calories': 'Calories',
-         'duration': 'ActivityDurationInMins',
-         'timeTotal': 'TotalTime',
-         'updatedAt': 'ActivityUpdatedDateTime',
-         'timeMoving': 'MovingDuration',
-         'paceAverage': 'AveragePace',
-         'speedAverage': 'AverageSpeed',
-         'distanceTotal': 'TotalDistance',
-         'elevationGain': 'ElevationGain',
-         'elevationLoss': 'ElevationLoss'},
+        {'calories': 'FirstRecordingCaloriesBurned',
+         'duration': 'FirstRecordingDuration',
+         'timeTotal': 'FirstRecordingTotalTime',
+         'updatedAt': 'FirstRecordingUpdatedDateTime',
+         'timeMoving': 'FirstRecordingMovingTime',
+         'paceAverage': 'FirstRecordingAveragePace',
+         'speedAverage': 'FirstRecordingAverageSpeed',
+         'distanceTotal': 'FirstRecordingTotalDistance',
+         'elevationGain': 'FirstRecordingElevationGain',
+         'elevationLoss': 'FirstRecordingElevationLoss'},
         axis=1
     )
     logger.info('Completing unpack_recording_summary at ' + str(datetime.now()))
@@ -91,9 +92,9 @@ def clean_dataframe(df):
         'Pseudo_User_ID': 'PseudoUserID',
         'signup_date': 'AccountSignUpDateTime',
         'start_date': 'ProSubscriptionSignUpDateTime',
-        'Recording_ID': 'RecordingID',
+        'Recording_ID': 'FirstRecordingID',
         'Date_Time': 'FirstRecordingDateTime',
-        'Activity_Type': 'ActivityType'
+        'Activity_Type': 'FirstRecordingActivityType'
     }, axis=1)
 
     df['AccountSignUpDateTime'] = df['AccountSignUpDateTime'].astype('datetime64[ns]')
@@ -125,6 +126,50 @@ def compute_calculated_columns(df):
     return df
 
 
+def validate_df(df):
+    """
+    Applies the outlier rules to null out metrics that are above a max value given a particular activity type.
+
+    Checks for uniqueness and nullability on certain columns.
+
+    :param df: Merged users and recordings tables, represented as a Pandas DataFrame.
+    :return: pd.DataFrame
+    """
+    outlier_rules = [
+        {
+            'activity_type': 'Hiking',
+            'metric': 'FirstRecordingTotalTime',
+            'max_value': 64800
+        },
+        {
+            'activity_type': 'Backpacking',
+            'metric': 'FirstRecordingTotalTime',
+            'max_value': 864000
+        },
+        {
+            'activity_type': 'Hiking',
+            'metric': 'FirstRecordingAverageSpeed',
+            'max_value': 6
+        }
+    ]
+
+    for rule in outlier_rules:
+        activity_type = rule['activity_type']
+        metric = rule['metric']
+        max_value = rule['max_value']
+
+        rows_impacted = (df['FirstRecordingActivityType'] == activity_type) & (df[metric] > max_value)
+        df.loc[rows_impacted, metric] = np.nan
+
+    if not df['PseudoUserID'].is_unique:
+        raise exception('PseudoUserID is not unique.')
+    if not df['FirstRecordingID'].is_unique:
+        raise exception('PseudoUserID is not unique.')
+    if df['PseudoUserID'].isnull().values.any():
+        raise exception('One or more record does not have a PseudoUserID.')
+
+    return df
+
 def save_df(df):
     """
     Saves the dataframe to the project folder.
@@ -155,4 +200,5 @@ if __name__ == '__main__':
     cleaned_df = clean_dataframe(merged_df)
     unpacked_df = unpack_recording_summary(cleaned_df)
     final_df = compute_calculated_columns(unpacked_df)
-    save_df(final_df)
+    validated_df = validate_df(final_df)
+    save_df(validated_df)
